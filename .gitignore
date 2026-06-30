@@ -1,0 +1,6 @@
+build/
+out/
+__pycache__/
+*.wasm
+*.aot
+*.signed
