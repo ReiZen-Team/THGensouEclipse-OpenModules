@@ -80,3 +80,4 @@ jobs:
             build/*.wasm
             build/*.aot
           if-no-files-found: error
+
