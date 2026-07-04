@@ -143,9 +143,9 @@ inline bool has_perm(uint64_t perm) {
 }
 
 // ── Kernel ABI ──────────────────────────────────────────────────────────────────
-inline std::string kernel_vermagic() {
-    auto r = host::call("kernel.vermagic");
-    return r.is_string() ? r.get<std::string>() : std::string{};
+inline uint32_t kernel_vernumber() {
+    auto r = host::call("kernel.vernumber");
+    return r.is_number() ? r.get<uint32_t>() : 0u;
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────────
