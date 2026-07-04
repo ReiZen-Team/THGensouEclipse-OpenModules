@@ -142,6 +142,12 @@ inline bool has_perm(uint64_t perm) {
     return r.is_boolean() && r.get<bool>();
 }
 
+// ── Kernel ABI ──────────────────────────────────────────────────────────────────
+inline uint32_t kernel_vernumber() {
+    auto r = host::call("kernel.vernumber");
+    return r.is_number() ? r.get<uint32_t>() : 0u;
+}
+
 // ── Events ──────────────────────────────────────────────────────────────────────
 inline void emit(const std::string& ev, const json& data = json(nullptr)) {
     host::notify("evt.emit", {{"event", ev}, {"data", data}});
