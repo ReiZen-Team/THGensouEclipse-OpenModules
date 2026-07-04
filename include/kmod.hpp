@@ -142,6 +142,12 @@ inline bool has_perm(uint64_t perm) {
     return r.is_boolean() && r.get<bool>();
 }
 
+// ── Kernel ABI ──────────────────────────────────────────────────────────────────
+inline std::string kernel_vermagic() {
+    auto r = host::call("kernel.vermagic");
+    return r.is_string() ? r.get<std::string>() : std::string{};
+}
+
 // ── Events ──────────────────────────────────────────────────────────────────────
 inline void emit(const std::string& ev, const json& data = json(nullptr)) {
     host::notify("evt.emit", {{"event", ev}, {"data", data}});
