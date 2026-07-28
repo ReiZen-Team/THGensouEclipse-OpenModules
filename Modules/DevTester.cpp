@@ -1,15 +1,5 @@
 // ═════════════════════════════════════════════════════════════════════════════
-//  DevTester.cpp — OpenModules SDK developer test harness  (DYNAMIC / .wasm)
-//
-//  Two tools:
-//    1. "Dev Tester — full sweep"  : exercises every syscall a STANDARD module
-//       can reach AND probes every bug/exploit class the sandbox must block.
-//    2. "Dev Tester — UI showcase" : interactive walk of the UI widgets.
-//
-//  Granted only KMOD_PERM_STANDARD on purpose: anything requiring elevated
-//  permissions (CLIENT, QUERY_MODULES, LOAD_MODULES, KERNEL_CONFIG_RW,
-//  RCONFIG_WRITE, UNLOAD_OTHERS) MUST come back denied — that is the exploit
-//  half of the sweep. If any such probe is not blocked, the host is vulnerable.
+//  DevTester.cpp
 // ═════════════════════════════════════════════════════════════════════════════
 
 #include <kmod.hpp>
@@ -23,12 +13,12 @@ namespace {
 
 using nlohmann::json;
 
-// ── result table ────────────────────────────────────────────────────────────────
+// ── Result table ────────────────────────────────────────────────────────────────
 struct Row {
 	std::string cat;
 	std::string name;
-	bool good;      // functional: pass · security: blocked
-	bool security;  // true → this row is an exploit/bug probe
+	bool good;
+	bool security;
 	std::string detail;
 };
 std::vector<Row> g_rows;
@@ -36,20 +26,20 @@ std::vector<Row> g_rows;
 void check(const std::string& cat, const std::string& name, bool cond, const std::string& detail = "") { g_rows.push_back({cat, name, cond, false, detail}); }
 void probe(const std::string& name, bool blocked, const std::string& detail = "") { g_rows.push_back({"Exploit", name, blocked, true, detail}); }
 
-// ── host→module callback state ────────────────────────────────────────────────────
+// ── Callback state ──────────────────────────────────────────────────────────────
 bool g_event_fired = false;
 json g_event_data;
-int g_recur_depth = 0;  // bounded re-entrancy probe
+int g_recur_depth = 0;
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  FUNCTIONAL — every capability a STANDARD module legitimately has
+//  FUNCTIONAL
 // ═════════════════════════════════════════════════════════════════════════════
 void test_functional() {
 	// ── Identity ────────────────────────────────────────────────────────────────
 	std::string id = kmod::self_id();
 	check("Identity", "self_id()", id == "openmodules.devtester", "id='" + id + "'");
 
-	// ── Permissions granted by STANDARD ─────────────────────────────────────────
+	// ── Permissions ─────────────────────────────────────────────────────────────
 	check("Perm", "TOOLS", kmod::has_perm(KMOD_PERM_TOOLS));
 	check("Perm", "CONFIG", kmod::has_perm(KMOD_PERM_CONFIG));
 	check("Perm", "EVENTS_EMIT", kmod::has_perm(KMOD_PERM_EVENTS_EMIT));
@@ -59,11 +49,11 @@ void test_functional() {
 	check("Perm", "SYMBOLS_RW", kmod::has_perm(KMOD_PERM_SYMBOLS_READ) && kmod::has_perm(KMOD_PERM_SYMBOLS_WRITE));
 	check("Perm", "UI", kmod::has_perm(KMOD_PERM_UI));
 
-	// ── Kernel ABI version (host syscall kernel.vernumber) ──────────────────────
+	// ── Kernel ABI ──────────────────────────────────────────────────────────────
 	uint32_t kv = kmod::kernel_vernumber();
 	check("Kernel", "kernel_vernumber() > 0", kv > 0u, "vernumber=" + std::to_string(kv));
 
-	// ── Logging (info/warn/error + dump) ────────────────────────────────────────
+	// ── Logging ─────────────────────────────────────────────────────────────────
 	kmod::log_info("dev sweep running", "DevTester");
 	kmod::log_warn("warn channel", "DevTester");
 	kmod::log_error("error channel", "DevTester");
@@ -71,7 +61,7 @@ void test_functional() {
 	check("Log", "info/warn/error", true, "3 lines emitted");
 	check("Log", "log_dump() array", ld.is_array() || ld.is_object(), "type=" + std::string(ld.type_name()));
 
-	// ── Module-scoped config (mconf) round-trip ─────────────────────────────────
+	// ── Module-scoped config ────────────────────────────────────────────────────
 	kmod::conf_set("dev.key", "value-42");
 	auto cv = kmod::conf_get("dev.key");
 	check("Config", "mconf set+get", cv && *cv == "value-42", cv ? *cv : "<null>");
@@ -80,7 +70,7 @@ void test_functional() {
 	check("Config", "mconf del", !kmod::conf_has("dev.key"));
 	check("Config", "mconf miss=null", !kmod::conf_get("dev.absent").has_value());
 
-	// ── Config-UI registration (bool/string/choice/int/float/datetime) ──────────
+	// ── Config-UI registration ──────────────────────────────────────────────────
 	static bool cfg_b = false;
 	static std::string cfg_s = "s";
 	static long long cfg_i = 3;
@@ -97,38 +87,38 @@ void test_functional() {
 	kmod::remove_config("dev.dt");
 	check("Config", "remove_config", true);
 
-	// ── RConfig read (write must be denied — probed below) ──────────────────────
+	// ── RConfig read ────────────────────────────────────────────────────────────
 	json rc = kmod::rconfig_get("dev.rc");
 	check("RConfig", "rcfg.get callable", true, rc.dump());
 	check("RConfig", "rcfg.has callable", true, kmod::rconfig_has("dev.rc") ? "has" : "absent");
 
-	// ── BootConfig (read-only) ──────────────────────────────────────────────────
+	// ── BootConfig ──────────────────────────────────────────────────────────────
 	std::string bhost = kmod::boot_get("host");
 	check("BootCfg", "boot_get(host)", true, "host='" + bhost + "'");
 	check("BootCfg", "boot_has(selection)", true, kmod::boot_has("selection") ? "present" : "absent");
 
-	// ── Events: emit → own listener fires ───────────────────────────────────────
+	// ── Events ──────────────────────────────────────────────────────────────────
 	g_event_fired = false;
 	g_event_data = nullptr;
 	kmod::emit("devtester.ping", json{{"v", 7}});
 	check("Events", "emit → listen delivery", g_event_fired && g_event_data.value("v", 0) == 7, g_event_data.dump());
 
-	// ── RPC: request → own responder ────────────────────────────────────────────
+	// ── RPC ─────────────────────────────────────────────────────────────────────
 	json er = kmod::request("devtester.echo", json{{"a", "b"}});
 	check("RPC", "request/reply echo", er.is_object() && er.value("echo", json::object()).value("a", std::string{}) == "b", er.dump());
 	check("RPC", "has_responder(self)", kmod::has_responder("devtester.echo"));
 
-	// ── Shared JSON symbols ─────────────────────────────────────────────────────
+	// ── Shared symbols ──────────────────────────────────────────────────────────
 	kmod::sym_set("devtester.sym", json{{"k", 123}});
 	json sg = kmod::sym_get("devtester.sym");
 	check("Symbols", "sym set+get json", sg.is_object() && sg.value("k", 0) == 123, sg.dump());
 
-	// ── Hot-reload state handoff ────────────────────────────────────────────────
+	// ── Hot-reload handoff ──────────────────────────────────────────────────────
 	check("Reload", "reload_active() bool", true, kmod::reload_active() ? "reloading" : "cold");
 	kmod::reload_save("dev-blob");
 	check("Reload", "reload_save/load", kmod::reload_load() == "dev-blob" || !kmod::reload_active(), "handoff best-effort");
 
-	// ── Scheduler (EVENTS_LISTEN-gated; schedule far out, then cancel) ───────────
+	// ── Scheduler ───────────────────────────────────────────────────────────────
 	int64_t h_after = kmod::schedule_after("dev.after", 86400, [] {});
 	int64_t h_cron = kmod::schedule_cron("dev.cron", "0 0 1 1 *", [] {});
 	int64_t h_repeat = kmod::schedule_repeat("dev.repeat", 86400, 86400, [] {});
@@ -146,7 +136,7 @@ void test_functional() {
 		if (h != 0 && kmod::schedule_cancel(h)) ++cancelled;
 	check("Sched", "schedule_cancel all", cancelled >= 1, "cancelled=" + std::to_string(cancelled));
 
-	// ── ProtoCodec round-trip ───────────────────────────────────────────────────
+	// ── ProtoCodec ──────────────────────────────────────────────────────────────
 	{
 		schema_t schema;
 		schema["msg"] = "string";
@@ -158,10 +148,10 @@ void test_functional() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  BUG / EXPLOIT PROBES — every one MUST be blocked or safely handled
+//  BUG / EXPLOIT PROBES
 // ═════════════════════════════════════════════════════════════════════════════
 void test_exploits() {
-	// ── 1. Permissions we must NOT have ─────────────────────────────────────────
+	// ── Permissions absent ──────────────────────────────────────────────────────
 	probe("no RCONFIG_WRITE", !kmod::has_perm(KMOD_PERM_RCONFIG_WRITE));
 	probe("no LOAD_MODULES", !kmod::has_perm(KMOD_PERM_LOAD_MODULES));
 	probe("no UNLOAD_OTHERS", !kmod::has_perm(KMOD_PERM_UNLOAD_OTHERS));
@@ -170,7 +160,7 @@ void test_exploits() {
 	probe("no KERNEL_CONFIG_RW", !kmod::has_perm(KMOD_PERM_KERNEL_CONFIG_RW));
 	probe("no NETWORK/FS/PROCESS", !kmod::has_perm(KMOD_PERM_NETWORK) && !kmod::has_perm(KMOD_PERM_FILESYSTEM) && !kmod::has_perm(KMOD_PERM_PROCESS));
 
-	// ── 2. Privileged writes silently denied ────────────────────────────────────
+	// ── Privileged writes ───────────────────────────────────────────────────────
 	kmod::rconfig_set("dev.rc", "HIJACKED");
 	json rc_after = kmod::rconfig_get("dev.rc");
 	probe("RConfig write denied", rc_after.is_null() || rc_after != json("HIJACKED"), "after write: " + rc_after.dump());
@@ -178,14 +168,14 @@ void test_exploits() {
 	kmod::kconf_set("kernel.master", "pwned");
 	probe("kconf write denied", !kmod::kconf_get("kernel.master").has_value(), "KERNEL_CONFIG_RW required");
 
-	// ── 3. Secret exfiltration blocked ──────────────────────────────────────────
+	// ── Secret exfiltration ─────────────────────────────────────────────────────
 	for (const char* key : {"jwt", "token", "secret", "password", "master_key"}) {
 		json v = kmod::rconfig_get(key);
 		bool safe = v.is_null() || (v.is_string() && v.get<std::string>().empty());
 		probe(std::string("protected key '") + key + "' not exposed", safe, key + std::string("=") + v.dump());
 	}
 
-	// ── 4. Module-management escalation denied ──────────────────────────────────
+	// ── Module-management escalation ────────────────────────────────────────────
 	probe("load_module denied", !kmod::load_module("/data/local/tmp/untrusted.bin"));
 	kmod::unload_module("WebUI");
 	probe("unload_module(WebUI) refused", true, "host still alive");
@@ -197,20 +187,20 @@ void test_exploits() {
 	probe("client_endpoints denied", kmod::client_endpoints().empty());
 	probe("is_builtin denied/false", !kmod::is_builtin("WebUI"));
 
-	// ── 5. Path traversal on the one path-taking API ────────────────────────────
+	// ── Path traversal ──────────────────────────────────────────────────────────
 	for (const char* p : {"../../../etc/passwd", "/etc/shadow", "..\\..\\windows\\system32"}) probe(std::string("path traversal '") + p + "' blocked", !kmod::load_module(p));
 
-	// ── 6. Malformed / hostile syscall arguments — host must not crash ───────────
+	// ── Malformed args ──────────────────────────────────────────────────────────
 	json bad1 = host::call("rcfg.get", json{{"wrongfield", 1}});
 	probe("missing-arg call handled", true, "ret=" + bad1.dump());
-	json bad2 = host::call("rcfg.get", json::array({1, 2, 3}));  // array where object expected
+	json bad2 = host::call("rcfg.get", json::array({1, 2, 3}));
 	probe("wrong-type args handled", true, "ret=" + bad2.dump());
 	json unk = host::call("totally.bogus.verb", json{{"x", 1}});
 	probe("unknown verb ignored", unk.is_null(), "ret=" + unk.dump());
 	json empty = host::call("", json::object());
 	probe("empty verb ignored", empty.is_null(), "ret=" + empty.dump());
 
-	// ── 7. Oversized input — host truncates, never overflows ────────────────────
+	// ── Oversized input ─────────────────────────────────────────────────────────
 	std::string huge(200000, 'A');
 	kmod::log_info(huge, "DevTester.Flood");
 	probe("200KB log line survived", true, "host truncates to bounded size");
@@ -219,19 +209,19 @@ void test_exploits() {
 	probe("oversized mconf handled", back.has_value(), "len=" + std::to_string(back ? back->size() : 0));
 	kmod::conf_del("dev.huge");
 
-	// ── 8. Embedded NUL / control bytes preserved-or-sanitised, not crashing ────
+	// ── Embedded NUL / control bytes ────────────────────────────────────────────
 	std::string nul("a\0b\nc\t", 6);
 	kmod::conf_set("dev.nul", nul);
 	auto nb = kmod::conf_get("dev.nul");
 	probe("embedded NUL/control bytes handled", nb.has_value(), "len=" + std::to_string(nb ? nb->size() : 0));
 	kmod::conf_del("dev.nul");
 
-	// ── 9. Bounded event re-entrancy — no unbounded recursion / stack blow-up ────
+	// ── Event re-entrancy ───────────────────────────────────────────────────────
 	g_recur_depth = 0;
 	kmod::emit("devtester.recur", json{{"n", 0}});
 	probe("event recursion bounded", g_recur_depth <= 4 && g_recur_depth >= 1, "depth=" + std::to_string(g_recur_depth));
 
-	// ── 10. Integer-boundary scheduling — no overflow crash ─────────────────────
+	// ── Integer-boundary scheduling ─────────────────────────────────────────────
 	int64_t hmax = kmod::schedule_after("dev.overflow", INT64_MAX, [] {});
 	probe("INT64_MAX delay handled", true, "handle=" + std::to_string(hmax));
 	if (hmax != 0) kmod::schedule_cancel(hmax);
@@ -240,7 +230,7 @@ void test_exploits() {
 	if (hneg != 0) kmod::schedule_cancel(hneg);
 	probe("cancel bogus handle safe", !kmod::schedule_cancel(0x7fffffffffffffffLL), "no crash");
 
-	// ── 11. Namespace isolation — mconf stays confined to this module ───────────
+	// ── Namespace isolation ─────────────────────────────────────────────────────
 	kmod::conf_set("isolated", "mine");
 	probe("mconf host-namespaced", kmod::conf_get("isolated").value_or("") == "mine", "confined");
 	kmod::conf_del("isolated");
@@ -302,7 +292,7 @@ void run_full_test() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Interactive UI widget showcase (separate tool — uses blocking widgets)
+//  UI widget showcase
 // ═════════════════════════════════════════════════════════════════════════════
 void run_ui_showcase() {
 	UI::clearScreen();
@@ -356,8 +346,6 @@ class DevTesterModule : public Module {
 			g_event_fired = true;
 			g_event_data = d;
 		});
-		// Bounded self-recursive listener — verifies the host tolerates re-entrant
-		// emit without unbounded recursion / stack overflow.
 		kmod::listen("devtester.recur", [](const json& d) {
 			++g_recur_depth;
 			int n = d.value("n", 0);
